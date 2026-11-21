@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>내 데이터를 아는 AI 비서 — 교통량 AI 어시스턴트</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚗</text></svg>" />
+  <script src="/static/vendor/chart.umd.js"></script>  <!-- Chart.js 4.4.1 (MIT), 인터넷 없이도 동작하도록 포함 -->
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🚗</span>
+    <div>
+      <h1>내 데이터를 아는 AI 비서</h1>
+      <p id="dataLabel" class="sub">데이터 불러오는 중…</p>
+    </div>
+  </div>
+  <div id="llmStatus" class="status-pill">AI 연결 확인 중…</div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="chat" role="tab">💬 AI 채팅</button>
+  <button class="tab" data-tab="dashboard" role="tab">📊 분석 대시보드</button>
+  <button class="tab" data-tab="records" role="tab">🗂️ 데이터 관리</button>
+  <button class="tab" data-tab="history" role="tab">🕘 대화 기록</button>
+</nav>
+
+<main>
+  <!-- ① AI 채팅 -->
+  <section id="tab-chat" class="panel active">
+    <div class="chat-layout">
+      <div class="chat-box">
+        <div id="messages" class="messages" aria-live="polite">
+          <div class="msg assistant intro">
+            <div class="bubble">안녕하세요! 저장된 데이터를 보고 답하는 AI 비서입니다.<br>날짜·기간·메모 내용을 넣어 물어보면 그 기록을 찾아서 답해 드려요.</div>
+          </div>
+        </div>
+        <div class="suggest" id="suggest"></div>
+        <form id="chatForm" class="chat-input">
+          <textarea id="question" rows="2" maxlength="500" placeholder="예) 2018년 4월 폭설 때 교통량은 얼마나 줄었어?  (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+          <div class="chat-actions">
+            <span id="qCount" class="muted">0 / 500</span>
+            <button id="sendBtn" type="submit" class="btn primary">보내기</button>
+          </div>
+        </form>
+      </div>
+      <aside class="side-card">
+        <h3>AI가 참고하는 데이터 요약</h3>
+        <p class="muted small">데이터를 추가·수정·삭제하면 분석이 자동으로 다시 실행되고, 아래 요약이 DB에 저장됩니다.</p>
+        <pre id="summaryText" class="summary-text">불러오는 중…</pre>
+        <p id="snapInfo" class="muted small"></p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ② 분석 대시보드 -->
+  <section id="tab-dashboard" class="panel">
+    <div class="toolbar">
+      <div class="seg" id="rangeSeg">
+        <button data-range="all" class="active">전체</button>
+        <button data-range="365">최근 1년</button>
+        <button data-range="180">6개월</button>
+        <button data-range="90">3개월</button>
+      </div>
+      <label>시작 <input type="date" id="dStart"></label>
+      <label>끝 <input type="date" id="dEnd"></label>
+      <button class="btn" id="applyRange">적용</button>
+      <span class="spacer"></span>
+      <button class="btn" id="refreshAnalysis">🔄 분석 다시 실행</button>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div class="card">
+      <h3>일별 값과 이동평균 <span class="muted small">(회색 = 일별, 파랑 = 7일 평균, 주황 = 30일 평균, 점 = 메모 있는 날)</span></h3>
+      <div class="chart-wrap tall"><canvas id="lineChart"></canvas></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h3>월별 평균 <span class="muted small">(최근 12개월)</span></h3><div class="chart-wrap"><canvas id="monthChart"></canvas></div></div>
+      <div class="card"><h3>요일별 평균 <span class="muted small">(1주 주기)</span></h3><div class="chart-wrap"><canvas id="weekChart"></canvas></div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h3>이상치 <span class="muted small">(같은 요일 평균에서 2.5 표준편차 이상 벗어난 날)</span></h3>
+        <table class="tbl"><thead><tr><th>날짜</th><th>값</th><th>z</th><th>메모</th></tr></thead><tbody id="anomalyBody"></tbody></table></div>
+      <div class="card"><h3>분석 결과 저장 이력 <span class="muted small">(analysis_snapshots)</span></h3>
+        <table class="tbl"><thead><tr><th>#</th><th>시각</th><th>계기</th><th>기록 수</th></tr></thead><tbody id="snapBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ③ 데이터 관리 (CRUD) -->
+  <section id="tab-records" class="panel">
+    <div class="card">
+      <h3 id="formTitle">새 데이터 추가</h3>
+      <form id="recordForm" class="record-form">
+        <input type="hidden" id="rid">
+        <label>날짜 <input type="date" id="fDate" required></label>
+        <label>값 <input type="number" id="fValue" step="any" required placeholder="예) 82000"></label>
+        <label class="grow">메모 <input type="text" id="fMemo" maxlength="200" placeholder="예) 공휴일, 폭설, 공사 통제 (선택)"></label>
+        <button type="submit" class="btn primary" id="saveBtn">추가</button>
+        <button type="button" class="btn" id="cancelEdit" hidden>취소</button>
+      </form>
+      <p id="formMsg" class="form-msg"></p>
+    </div>
+    <div class="card">
+      <div class="toolbar">
+        <label>시작 <input type="date" id="rStart"></label>
+        <label>끝 <input type="date" id="rEnd"></label>
+        <label>메모 검색 <input type="text" id="rQ" placeholder="예) 공휴일" maxlength="50"></label>
+        <button class="btn" id="rSearch">검색</button>
+        <button class="btn" id="rReset">초기화</button>
+        <span class="spacer"></span>
+        <a class="btn" href="/api/records/export.csv">⬇ CSV 내보내기</a>
+      </div>
+      <table class="tbl records">
+        <thead><tr><th>날짜</th><th>요일</th><th class="num">값</th><th>메모</th><th>작업</th></tr></thead>
+        <tbody id="recordBody"></tbody>
+      </table>
+      <div class="pager"><button class="btn" id="prevPage">‹ 이전</button><span id="pageInfo"></span><button class="btn" id="nextPage">다음 ›</button></div>
+    </div>
+  </section>
+
+  <!-- ④ 대화 기록 -->
+  <section id="tab-history" class="panel">
+    <div class="toolbar"><span id="histInfo" class="muted"></span><span class="spacer"></span>
+      <button class="btn danger" id="clearHistory">전체 삭제</button></div>
+    <div id="historyList"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
